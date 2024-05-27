@@ -3,6 +3,12 @@ package com.example.yournetra
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
@@ -18,6 +24,11 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.example.yournetra.databinding.ActivityMainBinding
+import com.example.yournetra.ml.AutoModel1
+import org.tensorflow.lite.support.common.FileUtil
+import org.tensorflow.lite.support.image.ImageProcessor
+import org.tensorflow.lite.support.image.TensorImage
+import org.tensorflow.lite.support.image.ops.ResizeOp
 
 @Suppress("DEPRECATION")
 class MainActivity : AppCompatActivity() {
@@ -25,9 +36,18 @@ class MainActivity : AppCompatActivity() {
         ActivityMainBinding.inflate(layoutInflater)
     }
 
+    lateinit var labels:List<String>
+
+    var colors = listOf<Int>(
+        Color.BLUE, Color.GREEN,Color.RED,Color.CYAN,Color.GRAY,Color.BLACK,Color.DKGRAY,Color.MAGENTA,Color.YELLOW)
+
+    val paint = Paint()
+    lateinit var imageProcessor: ImageProcessor
+    lateinit var bitmap: Bitmap
     lateinit var cameraDevice: CameraDevice
     lateinit var handler: Handler
     private lateinit var cameraManager: CameraManager
+    lateinit var model: AutoModel1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,6 +64,12 @@ class MainActivity : AppCompatActivity() {
 
 
         getPermission()
+
+        labels = FileUtil.loadLabels(this,"labels.txt")
+
+        imageProcessor = ImageProcessor.Builder().add(ResizeOp(3000,3000,ResizeOp.ResizeMethod.BILINEAR)).build()
+
+        model = AutoModel1.newInstance(this)
 
         val handlerThread =HandlerThread("videoThread")
         handlerThread.start()
@@ -71,9 +97,48 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+                bitmap = binding.textureView.bitmap!!
 
+
+
+                var image = TensorImage.fromBitmap(bitmap)
+                image = imageProcessor.process(image)
+
+                val outputs = model.process(image)
+                val locations = outputs.locationsAsTensorBuffer.floatArray
+                val classes = outputs.classesAsTensorBuffer.floatArray
+                val scores = outputs.scoresAsTensorBuffer.floatArray
+                val numberOfDetections = outputs.numberOfDetectionsAsTensorBuffer.floatArray
+
+                val mutable = bitmap.copy(Bitmap.Config.ARGB_8888,true)
+                val canvas = Canvas(mutable)
+
+                val h = mutable.height
+                val w = mutable.width
+                paint.textSize = h/15f
+                paint.strokeWidth = h/85f
+                var x= 0
+                scores.forEachIndexed{index, fl ->
+                    x = index
+                    x *= 4
+                    if(fl > 0.5){
+                        paint.setColor(colors.get(index))
+                        paint.style =Paint.Style.STROKE
+                        canvas.drawRect(RectF(locations.get(x+1)*w,locations.get(x)*h,locations.get(x+3)*w,locations.get(x+2)*h),paint)
+                        paint.style = Paint.Style.FILL
+                        canvas.drawText(labels.get(classes.get(index).toInt())+" "+fl.toString(),locations.get(x+1)*w,locations.get(x)*h,paint)
+                    }
+                }
+
+                binding.imageView.setImageBitmap(mutable)
             }
         }
+    }
+
+
+    override fun onDestroy() {
+        super.onDestroy()
+        model.close()
     }
 
     @SuppressLint("MissingPermission")
